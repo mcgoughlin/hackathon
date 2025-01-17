@@ -1,0 +1,15 @@
+torch
+matplotlib
+nibabel
+dicom2nifti
+numpy
+opencv-python
+pandas
+pydicom
+scikit-image
+scikit-learn
+scipy
+numpy-stl
+simpleitk
+torchvision
+rt_utils
