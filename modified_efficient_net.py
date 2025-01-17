@@ -453,10 +453,12 @@ class ModifiedEfficientNet(nn.Module):
         self,
         inverted_residual_setting: Sequence[Union[MBConvConfig, FusedMBConvConfig]],
         dropout: float,
+        weights,
         stochastic_depth_prob: float = 0.2,
         num_classes: int = 1000,
         norm_layer: Optional[Callable[..., nn.Module]] = None,
         last_channel: Optional[int] = None,
+        target_size: Tuple[int, int] = (224, 224),
     ) -> None:
         super().__init__()
         _log_api_usage_once(self)
@@ -472,9 +474,10 @@ class ModifiedEfficientNet(nn.Module):
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
 
+        self.target_size = target_size
         layers: List[nn.Module] = []
 
-        # building first layer
+        # Build the first layer
         firstconv_output_channels = inverted_residual_setting[0].input_channels
         layers.append(
             Conv2dNormActivation(
@@ -482,29 +485,22 @@ class ModifiedEfficientNet(nn.Module):
             )
         )
 
-        # building inverted residual blocks
+        # Build inverted residual blocks
         total_stage_blocks = sum(cnf.num_layers for cnf in inverted_residual_setting)
         stage_block_id = 0
         for cnf in inverted_residual_setting:
             stage: List[nn.Module] = []
             for _ in range(cnf.num_layers):
-                # copy to avoid modifications. shallow copy is enough
                 block_cnf = copy.copy(cnf)
-
-                # overwrite info if not the first conv in the stage
                 if stage:
                     block_cnf.input_channels = block_cnf.out_channels
                     block_cnf.stride = 1
-
-                # adjust stochastic depth probability based on the depth of the stage block
                 sd_prob = stochastic_depth_prob * float(stage_block_id) / total_stage_blocks
-
                 stage.append(block_cnf.block(block_cnf, sd_prob, norm_layer))
                 stage_block_id += 1
-
             layers.append(nn.Sequential(*stage))
 
-        # building last several layers
+        # Build the last layer
         lastconv_input_channels = inverted_residual_setting[-1].out_channels
         lastconv_output_channels = last_channel if last_channel is not None else 4 * lastconv_input_channels
         layers.append(
@@ -518,12 +514,37 @@ class ModifiedEfficientNet(nn.Module):
         )
 
         self.features = nn.Sequential(*layers)
+        self.features.load_state_dict(weights, strict=False)
         self.avgpool = nn.AdaptiveAvgPool2d(1)
         self.classifier = nn.Sequential(
             nn.Dropout(p=dropout, inplace=True),
             nn.Linear(lastconv_output_channels, num_classes),
         )
 
+        # Upsample layers for fixed output size
+        self.upsample_layers = nn.ModuleList()
+        for i, layer in enumerate(self.features[1:]):
+            # Determine output channels
+            out_channels = self._get_out_channels(layer)
+            # Add a ConvTranspose2d layer to upsample to the target size
+            if i <4:
+                size = 2** (i + 1)
+            elif i <6:
+                size = 2** (i )
+            else:
+                size = 2** (i -1)
+            self.upsample_layers.append(
+                nn.ConvTranspose2d(
+                    in_channels=out_channels,
+                    out_channels=3,
+                    kernel_size=size,#2** (i + 1)
+                    stride=size,
+                    padding=0,
+                    output_padding=0,
+                )
+            )
+
+        # Initialize weights
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out")
@@ -537,18 +558,41 @@ class ModifiedEfficientNet(nn.Module):
                 nn.init.uniform_(m.weight, -init_range, init_range)
                 nn.init.zeros_(m.bias)
 
-    def _forward_impl(self, x: Tensor) -> Tensor:
-        x = self.features(x)
+    def _get_out_channels(self, layer):
+        """
+        Helper function to extract the number of output channels from a layer.
+        """
+        if isinstance(layer, nn.Sequential):
+            for submodule in reversed(layer):
+                if hasattr(submodule, "out_channels"):
+                    return submodule.out_channels
+        elif hasattr(layer, "out_channels"):
+            return layer.out_channels
+        raise ValueError("Cannot determine the number of output channels.")
 
+    def _forward_impl(self, x: Tensor) -> Tuple[Tensor, Tensor]:
+        feature_maps = []
+        print(x.shape)
+        for i, layer in enumerate(self.features):
+            x = layer(x)
+            if i > 0:  # Skip the first layer
+                print(x.shape)
+                upsampled = self.upsample_layers[i - 1](x)
+                feature_maps.append(upsampled)
+
+        # Concatenate all feature maps to form the segmentation map
+        seg_map = torch.cat(feature_maps, dim=1)
+
+        # Global average pooling for classification
         x = self.avgpool(x)
-        x = torch.flatten(x, 1)
-
+        x = self.flatten(x)
         # x = self.classifier(x)
 
-        return x
+        return x, seg_map
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor) -> Tuple[Tensor, Tensor]:
         return self._forward_impl(x)
+
 
 def _efficientnet_conf(
     arch: str,
@@ -618,6 +662,7 @@ def get_modified_efficientnet():
         inverted_residual_setting=inverted_residual_setting,
         dropout=0.2,
         last_channel=last_channel,
+        weights=new_weights
     )
 
     # Load pretrained weights (using `strict=False` to allow modifications)
@@ -628,5 +673,34 @@ def get_modified_efficientnet():
     modified_eff_net.out_channels = last_channel
 
     return modified_eff_net
+
+
+# if __name__ == "__main__":
+#     # Example input tensor
+#     dummy_input = torch.randn(1, 3, 224, 224)
+
+#     # Create a model
+#     inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_v2_s")
+#     pretrained_eff_net = models.efficientnet_v2_s(weights=models.EfficientNet_V2_S_Weights.IMAGENET1K_V1)
+#     pretrained_weights = pretrained_eff_net.state_dict()
+#     new_weights = {}
+#     for key,val in pretrained_weights.items():
+#         if key.startswith('feature'):
+#             new_weights[key] = val
+#     # print(new_weights.keys())
+#     model = ModifiedEfficientNet(
+#         inverted_residual_setting=inverted_residual_setting,
+#         dropout=0.2,
+#         last_channel=last_channel,
+#         weights=new_weights
+        
+#     )
+#     print(model)
+    
+#     # Get output
+#     logits, seg_map = model(dummy_input)
+#     print(f"Logits shape: {logits.shape}")
+#     print(f"Segmentation map shape: {seg_map.shape}")
+
 
 
