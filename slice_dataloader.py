@@ -26,6 +26,7 @@ class BrainMRI_Dataset(Dataset):
         assert os.path.exists(metadata_path), f"Metadata file {metadata_path} does not exist!"
         self.data_df = pd.read_csv(metadata_path)
 
+
         # Filter rows based on TRAIN column
         self.data_df = self.data_df[self.data_df["TRAIN"] == (1 if is_train else 0)]
 
@@ -96,6 +97,9 @@ class BrainMRI_Dataset(Dataset):
             np.random.shuffle(transforms)
             for transform in transforms:
                 image = transform(image)
+
+        # swap first and third axes
+        image = torch.swapaxes(image,0,2)
 
         return image, torch.tensor(label, device=self.device)
 
