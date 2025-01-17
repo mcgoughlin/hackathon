@@ -28,7 +28,7 @@ cnn = cnn.to(dev)
 
 slices_fp = '/home/nebius/data/slices/slices'
 epochs = 100
-penultimate_layer_on = 0.1*epochs
+penultimate_layer_on = 101
 tr_dl,vl_dl = get_data_loaders(slices_fp,'slice_meta.csv',batch_size=32,num_workers=10)
 
 df = tr_dl.dataset.data_df
@@ -78,8 +78,9 @@ for epoch in range(epochs):
     vit_losses.append(val_loss[1])
     plt.close()
     fig = plt.figure()
-    plt.show(cnn_losses,label='CNN')
-    plt.show(vit_losses,label='Swin')
+    plt.plot(cnn_losses,label='CNN')
+    plt.plot(vit_losses,label='Swin')
+    plt.legend()
     plt.savefig('/home/nebius/hackathon/plot.png')
     plt.show()
     print('Val Losses on Epoch {}: CNN: {:.3f}, Swin: {:.3f}'.format(epoch, cnn_loss.item(), vit_loss.item()))
