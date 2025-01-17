@@ -3,6 +3,7 @@ from slice_dataloader import BrainMRI_Dataset,get_data_loaders
 import torch
 import torchvision
 from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
 
 dev = 'cuda' if torch.cuda.is_available() else 'cpu'
 swin = torchvision.models.swin_v2_s(torchvision.models.Swin_V2_S_Weights.IMAGENET1K_V1)
@@ -34,6 +35,9 @@ df = tr_dl.dataset.data_df
 cnn_optimizer = torch.optim.Adam(cnn.parameters())
 vit_optimizer = torch.optim.Adam(swin.parameters())
 loss = torch.nn.CrossEntropyLoss()
+
+cnn_losses = []
+vit_losses = []
 
 for epoch in range(epochs):
     if epoch == penultimate_layer_on:
@@ -70,5 +74,13 @@ for epoch in range(epochs):
         val_loss[1]+=vit_loss.item()
     cnn_optimizer.zero_grad(),vit_optimizer.zero_grad()
     val_loss = [loss/len(vl_dl) for loss in val_loss]
+    cnn_losses.append(val_loss[0])
+    vit_losses.append(val_loss[1])
+    plt.close()
+    fig = plt.figure()
+    plt.show(cnn_losses,label='CNN')
+    plt.show(vit_losses,label='Swin')
+    plt.savefig('/home/nebius/hackathon/plot.png')
+    plt.show()
     print('Val Losses on Epoch {}: CNN: {:.3f}, Swin: {:.3f}'.format(epoch, cnn_loss.item(), vit_loss.item()))
     print()
