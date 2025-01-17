@@ -6,34 +6,37 @@ import numpy as np
 from random import random
 import torchvision
 
+
 class BrainMRI_Dataset(Dataset):
-    def __init__(self, path, is_train=True, device=None):
+    def __init__(self, slices_dir_path, metadata_file_name, is_train=True, device=None):
         """
-        Dataset loader for labelled brain MRI slices (NumPy format with 3 channels).
-        
+        Dataset loader for labelled brain MRI slices using a metadata CSV.
+
         Parameters:
-        - path: str, path to the base data directory.
+        - slices_dir_path: str, path to the directory containing slices and metadata.
+        - metadata_file_name: str, name of the metadata CSV file.
         - is_train: bool, whether the dataset is for training or validation.
         - device: torch.device, device to load tensors on (CPU or GPU).
         """
         self.is_train = is_train
         self.device = device
 
-        # Determine subdirectory (train or val) based on is_train
-        name = "train" if is_train else "val"
-        self.data_dir = os.path.join(path, "slices", name)
-        assert os.path.exists(self.data_dir), f"Directory {self.data_dir} does not exist!"
+        # Resolve full path to metadata
+        metadata_path = os.path.join(slices_dir_path, metadata_file_name)
+        assert os.path.exists(metadata_path), f"Metadata file {metadata_path} does not exist!"
+        self.data_df = pd.read_csv(metadata_path)
 
-        # CSV for labels
-        csv_path = os.path.join(self.data_dir, "labels.csv")
-        assert os.path.exists(csv_path), f"CSV file {csv_path} not found!"
-        self.data_df = pd.read_csv(csv_path)
+        # Filter rows based on TRAIN column
+        self.data_df = self.data_df[self.data_df["TRAIN"] == (1 if is_train else 0)]
 
-        # Image directory
-        self.image_dir = os.path.join(self.data_dir, "images")
-        assert os.path.exists(self.image_dir), f"Image directory {self.image_dir} does not exist!"
+        # Ensure there are samples
+        assert len(self.data_df) > 0, f"No data found for {'train' if is_train else 'val'} split!"
 
-        print(f"Loaded {len(self.data_df)} samples from {name}.")
+        # Set subdirectory based on train/val
+        sub_dir = "train" if is_train else "val"
+        self.data_dir = os.path.join(slices_dir_path, sub_dir)
+
+        print(f"Loaded {len(self.data_df)} samples for {'train' if is_train else 'val'}.")
 
     def __len__(self):
         return len(self.data_df)
@@ -47,8 +50,9 @@ class BrainMRI_Dataset(Dataset):
     def _rotate(self, tensor, p=0.5):
         if random() > p:
             return tensor
-        rot_extent = torch.randint(1, 4, (1,)).item()
-        return torch.rot90(tensor, rot_extent, dims=[-2, -1])
+        rot_extent = np.random.randint(1, 4)  # Randomly select 90, 180, or 270 degrees
+        return torch.rot90(tensor, rot_extent, dims=[0, 1])  # Rotate height and width
+
 
     def _flip(self, tensor, p=0.5):
         if random() > p:
@@ -74,14 +78,18 @@ class BrainMRI_Dataset(Dataset):
 
     def __getitem__(self, idx):
         # Retrieve file path and label
-        img_name = self.data_df.iloc[idx]["Filename"]
-        label = self.data_df.iloc[idx]["Label"]
+        row = self.data_df.iloc[idx]
+        img_name = row["FP"]
+        label = row["LABEL"]
+
+        # Resolve full path to image
+        img_path = os.path.join(self.data_dir, img_name)
+        assert os.path.exists(img_path), f"Image file {img_path} does not exist!"
 
         # Load NumPy image
-        img_path = os.path.join(self.image_dir, img_name)
         image = np.load(img_path).astype(np.float32)
-        image = torch.tensor(image, device=self.device)
-
+        image = torch.tensor(image, device=self.device)  # Convert to PyTorch tensor
+        
         # Apply augmentations if it's training data
         if self.is_train:
             transforms = [self._add_noise, self._rotate, self._flip, self._contrast, self._blur]
@@ -92,12 +100,13 @@ class BrainMRI_Dataset(Dataset):
         return image, torch.tensor(label, device=self.device)
 
 
-def get_data_loaders(data_dir, batch_size=16, num_workers=4, device=None):
+def get_data_loaders(slices_dir_path, metadata_file_name, batch_size=16, num_workers=4, device=None):
     """
     Prepare and return DataLoaders for train and val datasets.
 
     Parameters:
-    - data_dir: str, path to the base directory containing "slices".
+    - slices_dir_path: str, path to the directory containing slices and metadata.
+    - metadata_file_name: str, name of the metadata CSV file.
     - batch_size: int, batch size for DataLoader.
     - num_workers: int, number of workers for DataLoader.
     - device: torch.device, device to load tensors on.
@@ -107,8 +116,8 @@ def get_data_loaders(data_dir, batch_size=16, num_workers=4, device=None):
     - val_loader: DataLoader for validation data.
     """
     # Create datasets
-    train_dataset = BrainMRI_Dataset(path=data_dir, is_train=True, device=device)
-    val_dataset = BrainMRI_Dataset(path=data_dir, is_train=False, device=device)
+    train_dataset = BrainMRI_Dataset(slices_dir_path, metadata_file_name, is_train=True, device=device)
+    val_dataset = BrainMRI_Dataset(slices_dir_path, metadata_file_name, is_train=False, device=device)
 
     # Create DataLoaders
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
@@ -118,11 +127,13 @@ def get_data_loaders(data_dir, batch_size=16, num_workers=4, device=None):
 
 
 if __name__ == "__main__":
-    data_dir = "absolute/path/to/data"
+    # Example usage
+    slices_dir_path = "/absolute/path/to/slices"
+    metadata_file_name = "slice_meta.csv"
     batch_size = 16
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    train_loader, val_loader = get_data_loaders(data_dir, batch_size=batch_size, device=device)
+    train_loader, val_loader = get_data_loaders(slices_dir_path, metadata_file_name, batch_size=batch_size, device=device)
 
     for images, labels in train_loader:
         print(f"Train batch - Images: {images.shape}, Labels: {labels}")
