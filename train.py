@@ -27,8 +27,8 @@ cnn = cnn.to(dev)
 
 
 slices_fp = '/home/nebius/data/slices/slices'
-epochs = 100
-penultimate_layer_on = 101
+epochs = 1000
+penultimate_layer_on = 1001
 tr_dl,vl_dl = get_data_loaders(slices_fp,'slice_meta.csv',batch_size=32,num_workers=10)
 
 df = tr_dl.dataset.data_df

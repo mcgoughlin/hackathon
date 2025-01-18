@@ -544,6 +544,8 @@ class ModifiedEfficientNet(nn.Module):
                 )
             )
 
+        self.logit = nn.Conv2d(21,2,3,1,padding=1)
+
         # Initialize weights
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -572,11 +574,9 @@ class ModifiedEfficientNet(nn.Module):
 
     def _forward_impl(self, x: Tensor) -> Tuple[Tensor, Tensor]:
         feature_maps = []
-        print(x.shape)
         for i, layer in enumerate(self.features):
             x = layer(x)
             if i > 0:  # Skip the first layer
-                print(x.shape)
                 upsampled = self.upsample_layers[i - 1](x)
                 feature_maps.append(upsampled)
 
@@ -585,10 +585,11 @@ class ModifiedEfficientNet(nn.Module):
 
         # Global average pooling for classification
         x = self.avgpool(x)
-        x = self.flatten(x)
-        # x = self.classifier(x)
+        # print(x.shape)
+        x = torch.squeeze(x)
+        x = self.classifier(x)
 
-        return x, seg_map
+        return x, self.logit(seg_map)
 
     def forward(self, x: Tensor) -> Tuple[Tensor, Tensor]:
         return self._forward_impl(x)
@@ -653,10 +654,15 @@ def get_modified_efficientnet():
 
     # Load pretrained weights for EfficientNet
     pretrained_eff_net = models.efficientnet_v2_s(weights=models.EfficientNet_V2_S_Weights.IMAGENET1K_V1)
+    pretrained_weights = pretrained_eff_net.state_dict()
 
     # Extract the inverted residual configuration and last channel
     inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_v2_s")
 
+    new_weights = {}
+    for key,val in pretrained_weights.items():
+        if key.startswith('feature'):
+            new_weights[key] = val
     # Define the modified model
     modified_eff_net = ModifiedEfficientNet(
         inverted_residual_setting=inverted_residual_setting,

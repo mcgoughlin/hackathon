@@ -26,6 +26,10 @@ class Seg_Dataset(Dataset):
         assert os.path.exists(metadata_path), f"Metadata file {metadata_path} not found!"
         self.data_df = pd.read_csv(metadata_path)
         self.data_df = self.data_df[self.data_df["TRAIN"] == (1 if is_train else 0)]
+        print(self.data_df['SURV'].mean(),self.data_df['SURV'].std())
+        longs = (self.data_df['SURV']>365).sum()
+        print('##################')
+        print(longs)
 
         # Ensure there are samples
         assert len(self.data_df) > 0, f"No data found for {'train' if is_train else 'val'} split!"
@@ -106,8 +110,13 @@ class Seg_Dataset(Dataset):
 
         img = torch.swapaxes(img, 0, 2)
         seg = torch.swapaxes(seg, 0, 2)
+        seg = seg[1]
+        # print(seg.shape)
 
-        return img, seg, torch.tensor(label, device=self.device)
+
+
+
+        return file_name,img, seg, torch.tensor(label>300, device=self.device)
 
 
 def get_data_loaders(base_dir, metadata_file, batch_size=16, num_workers=4, device=None):
